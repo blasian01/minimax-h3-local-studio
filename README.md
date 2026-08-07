@@ -41,6 +41,9 @@ npm run dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000). The local companion API runs on port `8787`.
+The launcher selects a compatible Homebrew Node runtime when the active shell is
+still using Node 20, and reuses healthy Studio processes already occupying ports
+`3000` or `8787` instead of failing with `EADDRINUSE`.
 
 ## Direct 864×480 generation without a reference
 

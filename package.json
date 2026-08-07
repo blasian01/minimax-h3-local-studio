@@ -6,7 +6,7 @@
     "node": ">=22.13.0"
   },
   "scripts": {
-    "dev": "node scripts/studio.mjs",
+    "dev": "sh scripts/dev.sh",
     "dev:web": "vinext dev",
     "api": "node server/index.mjs",
     "build": "vinext build",
