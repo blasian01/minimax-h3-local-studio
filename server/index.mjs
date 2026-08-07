@@ -201,7 +201,9 @@ async function generate(body) {
       firstFrameImage = (await readFile(preparedPath)).toString("base64");
     }
 
+    const status = await modelStatus();
     const requestBody = {
+      ...(status.model ? { model: status.model } : {}),
       prompt,
       width,
       height,
