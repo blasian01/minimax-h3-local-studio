@@ -66,7 +66,7 @@ if (await isMLXServerRunning()) {
   console.log(`MLX server is already running on ${mlxUrl}`);
 } else {
   console.log(`Starting MLX server on ${mlxUrl} …`);
-  launch("mlx-serve", ["serve", "--max-resident-mem", "0"], "MLX server");
+  launch("mlx-serve", ["serve", "--max-resident-mem", "0", "--timeout", "0"], "MLX server");
 }
 
 if (await isStudioApiRunning()) {

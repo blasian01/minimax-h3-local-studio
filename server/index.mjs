@@ -6,7 +6,7 @@ import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 
-function postJson(urlStr, dataObj, timeoutMs = 3_600_000) {
+function postJson(urlStr, dataObj, timeoutMs = 0) {
   return new Promise((resolvePromise, reject) => {
     const url = new URL(urlStr);
     const body = Buffer.from(JSON.stringify(dataObj), "utf8");
@@ -24,9 +24,11 @@ function postJson(urlStr, dataObj, timeoutMs = 3_600_000) {
         resolvePromise({ ok: Boolean(res.statusCode && res.statusCode >= 200 && res.statusCode < 300), status: res.statusCode ?? 500, text });
       });
     });
-    req.setTimeout(timeoutMs, () => {
-      req.destroy(new Error(`Request timed out after ${timeoutMs / 1000}s`));
-    });
+    if (timeoutMs > 0) {
+      req.setTimeout(timeoutMs, () => {
+        req.destroy(new Error(`Request timed out after ${timeoutMs / 1000}s`));
+      });
+    }
     req.on("error", reject);
     req.write(body);
     req.end();
@@ -241,7 +243,7 @@ async function generate(body) {
       ...(firstFrameImage ? { first_frame_image: firstFrameImage } : {}),
     };
 
-    const response = await postJson(`${mlxUrl}/v1/video/generations`, requestBody, 3_600_000);
+    const response = await postJson(`${mlxUrl}/v1/video/generations`, requestBody, 0);
     let payload;
     try { payload = JSON.parse(response.text); }
     catch { throw new Error(`MiniMax returned an unreadable response (${response.status})`); }
