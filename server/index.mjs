@@ -1,10 +1,37 @@
 import { createHash, randomInt } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
-import { createServer } from "node:http";
+import { createServer, request as httpRequest } from "node:http";
 import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
+
+function postJson(urlStr, dataObj, timeoutMs = 3_600_000) {
+  return new Promise((resolvePromise, reject) => {
+    const url = new URL(urlStr);
+    const body = Buffer.from(JSON.stringify(dataObj), "utf8");
+    const req = httpRequest(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Content-Length": body.length,
+      },
+    }, (res) => {
+      const chunks = [];
+      res.on("data", (chunk) => chunks.push(chunk));
+      res.on("end", () => {
+        const text = Buffer.concat(chunks).toString("utf8");
+        resolvePromise({ ok: Boolean(res.statusCode && res.statusCode >= 200 && res.statusCode < 300), status: res.statusCode ?? 500, text });
+      });
+    });
+    req.setTimeout(timeoutMs, () => {
+      req.destroy(new Error(`Request timed out after ${timeoutMs / 1000}s`));
+    });
+    req.on("error", reject);
+    req.write(body);
+    req.end();
+  });
+}
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -214,15 +241,9 @@ async function generate(body) {
       ...(firstFrameImage ? { first_frame_image: firstFrameImage } : {}),
     };
 
-    const response = await fetch(`${mlxUrl}/v1/video/generations`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(requestBody),
-      signal: AbortSignal.timeout(2_700_000),
-    });
-    const responseText = await response.text();
+    const response = await postJson(`${mlxUrl}/v1/video/generations`, requestBody, 3_600_000);
     let payload;
-    try { payload = JSON.parse(responseText); }
+    try { payload = JSON.parse(response.text); }
     catch { throw new Error(`MiniMax returned an unreadable response (${response.status})`); }
     if (!response.ok || payload.error) throw new Error(payload.error?.message ?? payload.message ?? `MiniMax returned HTTP ${response.status}`);
     if (!payload.data) throw new Error("MiniMax returned no video data");
