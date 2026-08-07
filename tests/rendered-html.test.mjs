@@ -20,6 +20,8 @@ test("renders the MiniMax local studio", async () => {
   assert.match(html, /MiniMax Studio/i);
   assert.match(html, /Direct the next shot/i);
   assert.match(html, /864 × 480/i);
+  assert.match(html, /Load model/i);
+  assert.match(html, /Drop an image anywhere in this box/i);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape/i);
 });
 

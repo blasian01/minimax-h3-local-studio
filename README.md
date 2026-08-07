@@ -5,8 +5,9 @@ A small open-source React interface for running MiniMax H3 video generation loca
 ## Features
 
 - Chat-style prompt interface
-- Fixed 864×480 landscape generation
+- Selectable landscape, portrait, HD, and 4:3 generation resolutions
 - Optional drag-and-drop first-frame reference image
+- Load or unload the model from unified memory without stopping the local server
 - 5- and 10-second exports
 - Model-side fast step caching
 - Disk cache for identical prompt, seed, duration, and reference combinations

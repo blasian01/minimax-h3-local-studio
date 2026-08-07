@@ -28,6 +28,16 @@ await mkdir(generationDir, { recursive: true });
 
 let generationActive = false;
 
+const allowedResolutions = new Set([
+  "480x864",
+  "576x1024",
+  "640x480",
+  "704x1280",
+  "864x480",
+  "1024x576",
+  "1280x704",
+]);
+
 function corsHeaders(extra = {}) {
   return {
     "Access-Control-Allow-Origin": "http://localhost:3000",
@@ -98,13 +108,62 @@ async function serveFile(res, filename) {
   }
 }
 
+async function modelStatus() {
+  try {
+    const response = await fetch(`${mlxUrl}/v1/models`, { signal: AbortSignal.timeout(3000) });
+    const payload = await response.json();
+    const models = Array.isArray(payload.data) ? payload.data : [];
+    const model = models.find((item) => item.capabilities?.includes("video")) ?? models[0] ?? null;
+    const loaded = Boolean(model?.loaded && model?.state === "ready");
+    return {
+      serverOnline: response.ok,
+      connected: response.ok && loaded,
+      loaded,
+      model: model?.id ?? null,
+      modelState: model?.state ?? "unavailable",
+      bytesResident: Number(model?.bytes_resident ?? 0),
+      cache: "fast-step + disk",
+    };
+  } catch {
+    return {
+      serverOnline: false,
+      connected: false,
+      loaded: false,
+      model: null,
+      modelState: "offline",
+      bytesResident: 0,
+      cache: "fast-step + disk",
+    };
+  }
+}
+
+async function setModelLoaded(shouldLoad) {
+  if (generationActive) throw new Error("Wait for the current generation to finish before changing model memory");
+  const status = await modelStatus();
+  if (!status.serverOnline) throw new Error("The local MLX server is not running");
+  if (!status.model) throw new Error("No video model is registered with the local MLX server");
+  if (status.loaded === shouldLoad) return status;
+
+  const response = await fetch(`${mlxUrl}/v1/${shouldLoad ? "load" : "unload"}-model`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model: status.model }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || payload.error) {
+    throw new Error(payload.error?.message ?? payload.message ?? `Could not ${shouldLoad ? "load" : "unload"} the model`);
+  }
+  return modelStatus();
+}
+
 async function generate(body) {
   const prompt = String(body.prompt ?? "").trim();
   if (!prompt) throw new Error("Enter a prompt before generating");
   if (prompt.length > 4000) throw new Error("Prompt must be under 4,000 characters");
 
-  const width = 864;
-  const height = 480;
+  const requestedResolution = `${Number(body.width)}x${Number(body.height)}`;
+  const resolution = allowedResolutions.has(requestedResolution) ? requestedResolution : "864x480";
+  const [width, height] = resolution.split("x").map(Number);
   const duration = [5, 10].includes(Number(body.duration)) ? Number(body.duration) : 5;
   const requestedFrames = duration * 24;
   const steps = 30;
@@ -218,14 +277,13 @@ const server = createServer(async (req, res) => {
     }
     const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
     if (req.method === "GET" && url.pathname === "/api/health") {
-      try {
-        const response = await fetch(`${mlxUrl}/v1/models`, { signal: AbortSignal.timeout(3000) });
-        const payload = await response.json();
-        const model = payload.data?.find((item) => item.capabilities?.includes("video"));
-        return json(res, 200, { connected: response.ok && Boolean(model), model: model?.id ?? null, resolution: "864x480", cache: "fast-step + disk" });
-      } catch {
-        return json(res, 200, { connected: false, model: null, resolution: "864x480", cache: "fast-step + disk" });
-      }
+      return json(res, 200, await modelStatus());
+    }
+    if (req.method === "POST" && url.pathname === "/api/model/load") {
+      return json(res, 200, await setModelLoaded(true));
+    }
+    if (req.method === "POST" && url.pathname === "/api/model/unload") {
+      return json(res, 200, await setModelLoaded(false));
     }
     if (req.method === "GET" && url.pathname === "/api/generations") {
       return json(res, 200, { generations: await listGenerations() });

@@ -23,6 +23,25 @@ type ChatItem =
   | { id: string; role: "assistant"; generation: Generation }
   | { id: string; role: "error"; text: string };
 
+type ModelStatus = {
+  serverOnline: boolean;
+  connected: boolean;
+  loaded: boolean;
+  model: string | null;
+  modelState: string;
+  bytesResident: number;
+};
+
+const FORMATS = [
+  { value: "864x480", label: "864 × 480", shape: "LANDSCAPE" },
+  { value: "480x864", label: "480 × 864", shape: "PORTRAIT" },
+  { value: "1024x576", label: "1024 × 576", shape: "16:9" },
+  { value: "576x1024", label: "576 × 1024", shape: "9:16" },
+  { value: "1280x704", label: "1280 × 704", shape: "WIDE HD" },
+  { value: "704x1280", label: "704 × 1280", shape: "TALL HD" },
+  { value: "640x480", label: "640 × 480", shape: "4:3" },
+] as const;
+
 function formatDate(value: string) {
   return new Intl.DateTimeFormat(undefined, {
     month: "short",
@@ -39,6 +58,7 @@ function absolutize(path: string) {
 export default function Home() {
   const [prompt, setPrompt] = useState("");
   const [duration, setDuration] = useState(5);
+  const [resolution, setResolution] = useState("864x480");
   const [seed, setSeed] = useState(() => Math.floor(Math.random() * 10_000_000));
   const [useCache, setUseCache] = useState(true);
   const [reference, setReference] = useState<{ name: string; dataUrl: string } | null>(null);
@@ -46,18 +66,28 @@ export default function Home() {
   const [generating, setGenerating] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [connected, setConnected] = useState<boolean | null>(null);
+  const [modelStatus, setModelStatus] = useState<ModelStatus | null>(null);
+  const [modelBusy, setModelBusy] = useState(false);
   const [history, setHistory] = useState<Generation[]>([]);
   const [chat, setChat] = useState<ChatItem[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const dragDepthRef = useRef(0);
+
+  async function refreshModelStatus() {
+    const response = await fetch(`${API_URL}/api/health`);
+    const health: ModelStatus = await response.json();
+    setModelStatus(health);
+    setConnected(Boolean(health.connected));
+    return health;
+  }
 
   useEffect(() => {
     Promise.all([
-      fetch(`${API_URL}/api/health`).then((response) => response.json()),
+      refreshModelStatus(),
       fetch(`${API_URL}/api/generations`).then((response) => response.json()),
     ])
-      .then(([health, saved]) => {
-        setConnected(Boolean(health.connected));
+      .then(([, saved]) => {
         setHistory(saved.generations ?? []);
       })
       .catch(() => setConnected(false));
@@ -81,6 +111,9 @@ export default function Home() {
     return "Finishing the local render";
   }, [elapsed]);
 
+  const selectedFormat = FORMATS.find((format) => format.value === resolution) ?? FORMATS[0];
+  const [width, height] = resolution.split("x").map(Number);
+
   function acceptFile(file?: File) {
     if (!file) return;
     if (!file.type.startsWith("image/")) {
@@ -96,8 +129,26 @@ export default function Home() {
     reader.readAsDataURL(file);
   }
 
-  function onDrop(event: DragEvent<HTMLButtonElement>) {
+  function onDragEnter(event: DragEvent<HTMLFormElement>) {
     event.preventDefault();
+    dragDepthRef.current += 1;
+    setDragging(true);
+  }
+
+  function onDragOver(event: DragEvent<HTMLFormElement>) {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+  }
+
+  function onDragLeave(event: DragEvent<HTMLFormElement>) {
+    event.preventDefault();
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+    if (dragDepthRef.current === 0) setDragging(false);
+  }
+
+  function onDrop(event: DragEvent<HTMLFormElement>) {
+    event.preventDefault();
+    dragDepthRef.current = 0;
     setDragging(false);
     acceptFile(event.dataTransfer.files[0]);
   }
@@ -124,6 +175,8 @@ export default function Home() {
           seed,
           useCache,
           referenceImage: reference?.dataUrl ?? null,
+          width,
+          height,
         }),
       });
       const payload = await response.json();
@@ -151,6 +204,27 @@ export default function Home() {
     }
   }
 
+  async function toggleModel() {
+    if (!modelStatus?.serverOnline || modelBusy || generating) return;
+    const shouldLoad = !modelStatus.loaded;
+    setModelBusy(true);
+    try {
+      const response = await fetch(`${API_URL}/api/model/${shouldLoad ? "load" : "unload"}`, { method: "POST" });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error ?? "Could not change model memory state");
+      setModelStatus(payload);
+      setConnected(Boolean(payload.connected));
+    } catch (error) {
+      setChat((items) => [
+        ...items,
+        { id: crypto.randomUUID(), role: "error", text: error instanceof Error ? error.message : "Could not change model memory state" },
+      ]);
+      await refreshModelStatus().catch(() => setConnected(false));
+    } finally {
+      setModelBusy(false);
+    }
+  }
+
   return (
     <main className="app-shell">
       <header className="topbar">
@@ -161,9 +235,24 @@ export default function Home() {
             <h1>MiniMax Studio</h1>
           </div>
         </div>
-        <div className={`connection ${connected ? "online" : connected === false ? "offline" : "checking"}`}>
-          <span className="connection-dot" />
-          {connected ? "Model ready" : connected === false ? "Model offline" : "Checking model"}
+        <div className="model-controls">
+          <div className={`connection ${connected ? "online" : connected === false ? "offline" : "checking"}`}>
+            <span className="connection-dot" />
+            {modelBusy
+              ? modelStatus?.loaded ? "Unloading model" : "Loading model"
+              : modelStatus?.serverOnline && !modelStatus.loaded
+                ? "Model unloaded"
+                : connected ? "Model ready" : connected === false ? "Server offline" : "Checking model"}
+          </div>
+          <button
+            className="model-toggle"
+            type="button"
+            onClick={toggleModel}
+            disabled={!modelStatus?.serverOnline || modelBusy || generating}
+            title={modelStatus?.loaded ? "Unload the model and release unified memory" : "Load the model into unified memory"}
+          >
+            {modelBusy ? "Please wait…" : modelStatus?.loaded ? "Unload model" : "Load model"}
+          </button>
         </div>
       </header>
 
@@ -174,7 +263,15 @@ export default function Home() {
               <p className="eyebrow">PROMPT CONSOLE</p>
               <h2>Direct the next shot.</h2>
             </div>
-            <div className="format-chip">864 × 480 <span>·</span> 16:9</div>
+            <label className="format-picker">
+              <span className="sr-only">Generation resolution</span>
+              <select value={resolution} onChange={(event) => setResolution(event.target.value)} disabled={generating}>
+                {FORMATS.map((format) => (
+                  <option value={format.value} key={format.value}>{format.label} · {format.shape}</option>
+                ))}
+              </select>
+              <span className="format-chevron">⌄</span>
+            </label>
           </div>
 
           <div className="conversation" aria-live="polite">
@@ -229,7 +326,7 @@ export default function Home() {
               <article className="message generation-state">
                 <div className="pulse-orbit"><span /></div>
                 <div>
-                  <p className="message-label">RENDERING LOCALLY · {elapsed}s</p>
+                  <p className="message-label">RENDERING LOCALLY · {selectedFormat.label} · {elapsed}s</p>
                   <h3>{stage}</h3>
                   <p>Keep this tab open. H3 generations can take several minutes.</p>
                 </div>
@@ -238,7 +335,21 @@ export default function Home() {
             <div ref={chatEndRef} />
           </div>
 
-          <form className="composer" onSubmit={generate}>
+          <form
+            className={`composer ${dragging ? "dragging" : ""}`}
+            onSubmit={generate}
+            onDragEnter={onDragEnter}
+            onDragOver={onDragOver}
+            onDragLeave={onDragLeave}
+            onDrop={onDrop}
+          >
+            {dragging && (
+              <div className="drop-overlay" aria-hidden="true">
+                <span className="plus">+</span>
+                <strong>Drop reference image</strong>
+                <small>It will anchor the first frame</small>
+              </div>
+            )}
             {reference && (
               <div className="reference-preview">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -262,12 +373,8 @@ export default function Home() {
                 className={`drop-button ${dragging ? "dragging" : ""}`}
                 type="button"
                 onClick={() => inputRef.current?.click()}
-                onDragEnter={(event) => { event.preventDefault(); setDragging(true); }}
-                onDragOver={(event) => event.preventDefault()}
-                onDragLeave={() => setDragging(false)}
-                onDrop={onDrop}
               >
-                <span className="plus">+</span> {dragging ? "Drop image" : "Reference image"}
+                <span className="plus">+</span> Reference image
               </button>
               <input
                 ref={inputRef}
@@ -300,7 +407,7 @@ export default function Home() {
                 {generating ? "Rendering…" : "Generate"} <span>↗</span>
               </button>
             </div>
-            <p className="shortcut">⌘ Enter to generate · Fast step caching enabled · Prompts and files stay on localhost</p>
+            <p className="shortcut">Drop an image anywhere in this box · ⌘ Enter to generate · Prompts and files stay on localhost</p>
           </form>
         </div>
 
