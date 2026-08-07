@@ -70,6 +70,11 @@ export default function Home() {
   const [modelBusy, setModelBusy] = useState(false);
   const [history, setHistory] = useState<Generation[]>([]);
   const [chat, setChat] = useState<ChatItem[]>([]);
+  const [savePath, setSavePath] = useState("");
+  const [savePathDraft, setSavePathDraft] = useState("");
+  const [editingSavePath, setEditingSavePath] = useState(false);
+  const [savePathBusy, setSavePathBusy] = useState(false);
+  const [savePathError, setSavePathError] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const dragDepthRef = useRef(0);
@@ -86,9 +91,14 @@ export default function Home() {
     Promise.all([
       refreshModelStatus(),
       fetch(`${API_URL}/api/generations`).then((response) => response.json()),
+      fetch(`${API_URL}/api/save-path`).then((response) => response.json()),
     ])
-      .then(([, saved]) => {
+      .then(([, saved, pathData]) => {
         setHistory(saved.generations ?? []);
+        if (pathData.savePath) {
+          setSavePath(pathData.savePath);
+          setSavePathDraft(pathData.savePath);
+        }
       })
       .catch(() => setConnected(false));
   }, []);
@@ -225,6 +235,57 @@ export default function Home() {
     }
   }
 
+  function startEditingSavePath() {
+    setSavePathDraft(savePath);
+    setSavePathError("");
+    setEditingSavePath(true);
+  }
+
+  function cancelEditingSavePath() {
+    setSavePathDraft(savePath);
+    setSavePathError("");
+    setEditingSavePath(false);
+  }
+
+  async function commitSavePath() {
+    const trimmed = savePathDraft.trim();
+    if (!trimmed) {
+      setSavePathError("Path cannot be empty");
+      return;
+    }
+    if (trimmed === savePath) {
+      setEditingSavePath(false);
+      return;
+    }
+    setSavePathBusy(true);
+    setSavePathError("");
+    try {
+      const response = await fetch(`${API_URL}/api/save-path`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ savePath: trimmed }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error ?? "Could not update save path");
+      setSavePath(payload.savePath);
+      setSavePathDraft(payload.savePath);
+      setEditingSavePath(false);
+    } catch (error) {
+      setSavePathError(error instanceof Error ? error.message : "Could not update save path");
+    } finally {
+      setSavePathBusy(false);
+    }
+  }
+
+  function onSavePathKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      void commitSavePath();
+    } else if (event.key === "Escape") {
+      cancelEditingSavePath();
+    }
+  }
+
   return (
     <main className="app-shell">
       <header className="topbar">
@@ -255,6 +316,48 @@ export default function Home() {
           </button>
         </div>
       </header>
+
+      <div className="save-path-bar">
+        <span className="save-path-label">SAVE TO</span>
+        {editingSavePath ? (
+          <div className="save-path-editor">
+            <input
+              className="save-path-input"
+              type="text"
+              value={savePathDraft}
+              onChange={(event) => setSavePathDraft(event.target.value)}
+              onKeyDown={onSavePathKeyDown}
+              placeholder="/path/to/save/directory"
+              autoFocus
+              disabled={savePathBusy}
+            />
+            <button
+              className="save-path-action confirm"
+              type="button"
+              onClick={commitSavePath}
+              disabled={savePathBusy}
+              title="Confirm path"
+            >
+              {savePathBusy ? "…" : "✓"}
+            </button>
+            <button
+              className="save-path-action cancel"
+              type="button"
+              onClick={cancelEditingSavePath}
+              disabled={savePathBusy}
+              title="Cancel"
+            >
+              ✕
+            </button>
+            {savePathError && <span className="save-path-error">{savePathError}</span>}
+          </div>
+        ) : (
+          <button className="save-path-display" type="button" onClick={startEditingSavePath} title="Click to change save directory">
+            <span className="save-path-text">{savePath || "Loading…"}</span>
+            <span className="save-path-edit-icon">✎</span>
+          </button>
+        )}
+      </div>
 
       <section className="studio-grid">
         <div className="conversation-panel">

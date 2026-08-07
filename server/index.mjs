@@ -1,6 +1,6 @@
 import { createHash, randomInt } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,7 +23,7 @@ await loadLocalEnv();
 
 const port = Number(process.env.STUDIO_API_PORT ?? 8787);
 const mlxUrl = (process.env.MLX_SERVER_URL ?? "http://127.0.0.1:11234").replace(/\/$/, "");
-const generationDir = resolve(process.env.GENERATION_DIR ?? join(root, "storage", "generations"));
+let generationDir = resolve(process.env.GENERATION_DIR ?? join(root, "storage", "generations"));
 await mkdir(generationDir, { recursive: true });
 
 let generationActive = false;
@@ -216,6 +216,7 @@ async function generate(body) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(requestBody),
+      signal: AbortSignal.timeout(2_700_000),
     });
     const responseText = await response.text();
     let payload;
@@ -287,6 +288,24 @@ const server = createServer(async (req, res) => {
     }
     if (req.method === "GET" && url.pathname === "/api/generations") {
       return json(res, 200, { generations: await listGenerations() });
+    }
+    if (req.method === "GET" && url.pathname === "/api/save-path") {
+      return json(res, 200, { savePath: generationDir });
+    }
+    if (req.method === "POST" && url.pathname === "/api/save-path") {
+      const body = await readJson(req);
+      const newPath = String(body.savePath ?? "").trim();
+      if (!newPath) return json(res, 400, { error: "A save path is required" });
+      try {
+        const resolved = resolve(newPath);
+        await mkdir(resolved, { recursive: true });
+        // Verify the directory is writable by trying to stat it
+        await stat(resolved);
+        generationDir = resolved;
+        return json(res, 200, { savePath: generationDir });
+      } catch (err) {
+        return json(res, 400, { error: `Cannot use that directory: ${err instanceof Error ? err.message : err}` });
+      }
     }
     if (req.method === "GET" && url.pathname.startsWith("/media/")) {
       return serveFile(res, decodeURIComponent(url.pathname.slice(7)));
